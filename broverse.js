@@ -318,7 +318,7 @@ async function load() {
   let down = null;
   renderer.domElement.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
   renderer.domElement.addEventListener("pointerup", (e) => {
-    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 14) return;   // roomy enough for a hand-tracked pinch
     const a = hitAgent(e);
     if (a) show(a);
   });

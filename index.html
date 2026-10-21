@@ -911,7 +911,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
   <video id="pip-video" playsinline muted></video>
   <div class="pip-body">
     <span class="eyebrow accent" id="pip-status">Tracking your hand</span>
-    <p>Point with your index finger. Pinch to click.</p>
+    <p>Point with your index finger. Pinch to click; pinch and drag to scroll.</p>
     <div class="pip-actions"><button class="quest-reset" id="pip-rescan" type="button">Rescan</button><button class="btn" id="pip-stop" type="button">Stop camera</button></div>
   </div>
 </div>
@@ -1172,7 +1172,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     let drag = null;
     stage.addEventListener('pointerdown', e => {
       drag = { x: e.clientX, y: e.clientY, yaw: userYaw, pitch: userPitch };
-      stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing'; setHold(true);
+      try { stage.setPointerCapture(e.pointerId); } catch (err) {} stage.style.cursor = 'grabbing'; setHold(true);
     });
     stage.addEventListener('pointermove', e => {
       if (!drag) return;
@@ -1466,7 +1466,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     screen.addEventListener('blur', () => Object.keys(keys).forEach(k => setKey(k, false)));
     document.querySelectorAll('.dpad button').forEach(b => {
       const k = b.dataset.k;
-      b.addEventListener('pointerdown', e => { e.preventDefault(); b.setPointerCapture(e.pointerId); if (state === 'run') setKey(k, true); });
+      b.addEventListener('pointerdown', e => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (err) {} if (state === 'run') setKey(k, true); });
       ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, () => setKey(k, false)));
     });
     document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
@@ -1584,7 +1584,25 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
 
     let landmarker = null, stream = null, phase = 'off', resumeLive = false, rafId = 0, lastTime = -1;
     let profile = store.get('handProfile', null);
-    let scan = null, pinchOn = false, hoverEl = null, cur = null, lost = 0;
+    let scan = null, pinchOn = false, hoverEl = null, cur = null, lost = 0, press = null;
+    const CLICKABLE = 'a, button, .pane, label';
+    const HOLD = '#cpr-press, .dpad button';
+    const DRAG = '#stage';
+    // Pinches reach the page as real pointer events, so anything that listens for presses (not just clicks) works.
+    function firePointer(type, el, at, down) {
+      el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, clientX: at[0], clientY: at[1],
+        pointerId: 77, pointerType: 'touch', isPrimary: true, button: 0, buttons: down ? 1 : 0 }));
+    }
+    function handClick(el) {
+      const a = el.closest('a[href]');
+      if (a && a.target === '_blank') {
+        // A pinch isn't a real mouse click, so browsers may block the new tab; open it here instead.
+        const w = window.open(a.href, '_blank');
+        if (w) w.opener = null; else location.href = a.href;
+        return;
+      }
+      el.click();
+    }
 
     const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -1717,7 +1735,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       profile = { bones, width, length };
       store.set('handProfile', profile);
       phase = 'ready'; setSteps(3); setBar(1);
-      setMsg(`Your hand: ${length.toFixed(1)} cm from wrist to middle fingertip, palm ${width.toFixed(1)} cm across. Point with your index finger and pinch to click.`);
+      setMsg(`Your hand: ${length.toFixed(1)} cm from wrist to middle fingertip, palm ${width.toFixed(1)} cm across. Point with your index finger, pinch to click, and pinch and drag to scroll.`);
       skip.hidden = true; go.hidden = false; go.textContent = 'Start tracking';
     }
 
@@ -1742,7 +1760,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     }
     function stopLive() {
       phase = 'off'; live.h = null; stopCamera();
-      pip.hidden = true; cursor.hidden = true; setHover(null); pinchOn = false; cur = null;
+      pip.hidden = true; cursor.hidden = true; setHover(null); pinchOn = false; cur = null; press = null;
       vpLabel.textContent = VP_LABEL;
       openers.forEach(b => { b.classList.remove('on'); b.querySelector('span').textContent = b.dataset.label; });
     }
@@ -1796,11 +1814,34 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       cur = cur ? [cur[0] + (target[0] - cur[0]) * 0.5, cur[1] + (target[1] - cur[1]) * 0.5] : target;
       const ratio = d2(lm[4], lm[8]) / (d2(lm[0], lm[9]) || 1);
       const el = document.elementFromPoint(cur[0], cur[1]);
-      setHover(el ? el.closest('a, button, .pane, label') : null);
+      setHover(el ? el.closest(CLICKABLE) : null);
       if (!pinchOn && ratio < 0.28) {
         pinchOn = true;
-        if (hoverEl) { hoverEl.click(); complete('pinch'); }
-      } else if (pinchOn && ratio > 0.42) pinchOn = false;
+        const t = el;
+        press = { t, y0: cur[1], ly: cur[1], mode: 'tap' };
+        if (t) {
+          if (t.closest(HOLD)) press.mode = 'hold';         // the games' Compress button and robot arrows
+          else if (t.closest(DRAG)) press.mode = 'drag';    // the 3D warm-up hand: pinch-drag to orbit
+          firePointer('pointerdown', t, cur, true);
+        }
+      } else if (pinchOn && ratio > 0.42) {
+        pinchOn = false;
+        if (press && press.t && press.mode !== 'scroll') {
+          firePointer('pointerup', press.t, cur, false);
+          const c = press.mode === 'tap' && press.t.closest(CLICKABLE);
+          if (c) { handClick(c); complete('pinch'); }
+        }
+        press = null;
+      } else if (pinchOn && press) {
+        const dy = cur[1] - press.ly;
+        press.ly = cur[1];
+        if (press.mode === 'tap' && Math.abs(cur[1] - press.y0) > 28) {
+          press.mode = 'scroll';
+          if (press.t) firePointer('pointercancel', press.t, cur, false);
+        }
+        if (press.mode === 'scroll') window.scrollBy(0, -dy * 2.5);      // drag the page like a touchscreen
+        else if (press.mode === 'drag' && press.t) firePointer('pointermove', press.t, cur, true);
+      }
 
       c.globalAlpha = 0.5; c.strokeStyle = COL.accent; c.lineWidth = 2.5; c.lineCap = 'round';
       DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(pts[i][0], pts[i][1]); c.lineTo(pts[j][0], pts[j][1]); c.stroke(); });
@@ -1810,6 +1851,11 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       c.beginPath(); c.arc(cur[0], cur[1], pinchOn ? 10 : 16, 0, Math.PI * 2);
       c.strokeStyle = COL.signal; c.lineWidth = 2.5; c.stroke();
       if (pinchOn) { c.fillStyle = COL.signal; c.fill(); }
+      if (press && press.mode === 'scroll') {       // up/down chevrons while scrolling
+        c.strokeStyle = COL.signal; c.lineWidth = 2.5;
+        c.beginPath(); c.moveTo(cur[0] - 7, cur[1] - 22); c.lineTo(cur[0], cur[1] - 29); c.lineTo(cur[0] + 7, cur[1] - 22);
+        c.moveTo(cur[0] - 7, cur[1] + 22); c.lineTo(cur[0], cur[1] + 29); c.lineTo(cur[0] + 7, cur[1] + 22); c.stroke();
+      }
     }
   })();
 })();
