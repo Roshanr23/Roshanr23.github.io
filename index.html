@@ -911,7 +911,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
   <video id="pip-video" playsinline muted></video>
   <div class="pip-body">
     <span class="eyebrow accent" id="pip-status">Tracking your hand</span>
-    <p>Point with your index finger. Pinch to click; pinch and drag to scroll.</p>
+    <p>Point with your index finger. Pinch to click. Pinch and hold, then move up or down to scroll.</p>
     <div class="pip-actions"><button class="quest-reset" id="pip-rescan" type="button">Rescan</button><button class="btn" id="pip-stop" type="button">Stop camera</button></div>
   </div>
 </div>
@@ -1735,7 +1735,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       profile = { bones, width, length };
       store.set('handProfile', profile);
       phase = 'ready'; setSteps(3); setBar(1);
-      setMsg(`Your hand: ${length.toFixed(1)} cm from wrist to middle fingertip, palm ${width.toFixed(1)} cm across. Point with your index finger, pinch to click, and pinch and drag to scroll.`);
+      setMsg(`Your hand: ${length.toFixed(1)} cm from wrist to middle fingertip, palm ${width.toFixed(1)} cm across. Point with your index finger and pinch to click. To scroll, pinch and hold, then move your hand up or down.`);
       skip.hidden = true; go.hidden = false; go.textContent = 'Start tracking';
     }
 
@@ -1760,14 +1760,17 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     }
     function stopLive() {
       phase = 'off'; live.h = null; stopCamera();
-      pip.hidden = true; cursor.hidden = true; setHover(null); pinchOn = false; cur = null; press = null;
+      pip.hidden = true; cursor.hidden = true; cancelPress(); setHover(null); cur = null; fx.reset(); fy.reset(); smooth = null; pinchDist = null; prevP = null;
       vpLabel.textContent = VP_LABEL;
       openers.forEach(b => { b.classList.remove('on'); b.querySelector('span').textContent = b.dataset.label; });
     }
 
     // Rebuild the hand with the scanned bone lengths so it keeps the visitor's real proportions.
+    let prevP = null;
     function retarget(wl) {
-      const P = wl.map(p => [-p.x * 100, -p.y * 100, -p.z * 100]);
+      let P = wl.map(p => [-p.x * 100, -p.y * 100, -p.z * 100]);
+      if (prevP) P = P.map((q, i) => q.map((v, k) => prevP[i][k] + (v - prevP[i][k]) * 0.45));
+      prevP = P;
       const J = []; J[0] = [0, 0, 0];
       let b = 0;
       CHAINS.forEach(ch => {
@@ -1790,71 +1793,146 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       cursor.width = Math.round(innerWidth * dpr); cursor.height = Math.round(innerHeight * dpr);
     }
     addEventListener('resize', () => { if (phase === 'live') sizeCursor(); });
-    const mapPt = p => [clamp01((0.5 - p.x) * 1.35 + 0.5) * innerWidth, clamp01((p.y - 0.5) * 1.35 + 0.5) * innerHeight];
+    const mapPt = p => [clamp01((0.5 - p.x) * 1.6 + 0.5) * innerWidth, clamp01((p.y - 0.4) * 1.6 + 0.5) * innerHeight];
     function setHover(el) {
       if (hoverEl === el) return;
       if (hoverEl) hoverEl.classList.remove('hand-hover');
       hoverEl = el; if (el) el.classList.add('hand-hover');
     }
 
+    // One Euro filter: smooths hard while the hand is still and follows quickly when it moves,
+    // so the cursor neither jitters at rest nor lags on a fast sweep.
+    class OneEuro {
+      constructor(minCutoff, beta, dCutoff = 1) { this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff; this.reset(); }
+      reset() { this.x = null; this.dx = 0; this.t = 0; }
+      static alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+      filter(x, t) {
+        if (this.x === null) { this.x = x; this.t = t; return x; }
+        const dt = Math.max(1e-3, (t - this.t) / 1000); this.t = t;
+        this.dx += OneEuro.alpha(this.dCutoff, dt) * ((x - this.x) / dt - this.dx);
+        this.x += OneEuro.alpha(this.minCutoff + this.beta * Math.abs(this.dx), dt) * (x - this.x);
+        return this.x;
+      }
+    }
+    const fx = new OneEuro(0.9, 6), fy = new OneEuro(0.9, 6);
+    let smooth = null, pinchDist = null, pinchVotes = 0;
+    const PINCH_ON = 0.032, PINCH_OFF = 0.05;      // thumb-to-index tip, in metres (MediaPipe world landmarks)
+
+    // Joystick scrolling. Speed grows with how far the hand is from where the scroll began, past a
+    // small dead zone; it runs on its own animation frames so it stays smooth between camera frames,
+    // and uses instant scrolling because the page's smooth-scroll CSS would fight every step.
+    const SCROLL_DEAD = 26, SCROLL_GAIN = 7, SCROLL_MAX = 2200;
+    let scrollRaf = 0, scrollVel = 0, scrollLast = 0;
+    function startScroll() {
+      if (scrollRaf) return;
+      scrollVel = 0; scrollLast = performance.now();
+      const loop = (now) => {
+        const dt = Math.min(0.05, (now - scrollLast) / 1000); scrollLast = now;
+        let goal = 0;
+        if (press && press.mode === 'scroll' && cur) {
+          const off = cur[1] - press.y0, past = Math.max(0, Math.abs(off) - SCROLL_DEAD);
+          goal = Math.sign(off) * Math.min(SCROLL_MAX, past * SCROLL_GAIN);
+        }
+        scrollVel += (goal - scrollVel) * Math.min(1, dt * 10);            // ease in and out
+        if (Math.abs(scrollVel) > 1) window.scrollBy({ top: scrollVel * dt, behavior: 'instant' });
+        if (!(press && press.mode === 'scroll') && Math.abs(scrollVel) < 5) { scrollRaf = 0; scrollVel = 0; return; }
+        scrollRaf = requestAnimationFrame(loop);
+      };
+      scrollRaf = requestAnimationFrame(loop);
+    }
+
+    function cancelPress() {
+      if (press && press.t && press.mode !== 'scroll') firePointer('pointercancel', press.t, cur || [0, 0], false);
+      if (press && press.t && press.mode === 'hold') firePointer('pointerup', press.t, cur || [0, 0], false);
+      press = null; pinchOn = false; pinchVotes = 0;
+    }
+
     function liveStep(lm, wl) {
       const c = cursor.getContext('2d'), dpr = cursor.width / innerWidth;
       c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, innerWidth, innerHeight);
       if (!lm) {
-        if (++lost > 8) { live.h = null; setHover(null); vpLabel.textContent = VP_LABEL; pipStatus.textContent = 'Show your hand to the camera'; }
+        lost++;
+        if (lost === 3 && pinchOn) cancelPress();          // never leave a press stuck when the hand drops out
+        if (lost > 8) {
+          live.h = null; setHover(null); fx.reset(); fy.reset(); smooth = null; pinchDist = null; cur = null;
+          vpLabel.textContent = VP_LABEL; pipStatus.textContent = 'Show your hand to the camera';
+        }
         return;
       }
       lost = 0;
+      const t = performance.now();
       live.h = retarget(wl);
       vpLabel.textContent = 'Live · your hand';
       pipStatus.textContent = 'Tracking your hand';
 
-      const pts = lm.map(mapPt);
-      const target = pts[8];
-      cur = cur ? [cur[0] + (target[0] - cur[0]) * 0.5, cur[1] + (target[1] - cur[1]) * 0.5] : target;
-      const ratio = d2(lm[4], lm[8]) / (d2(lm[0], lm[9]) || 1);
+      // Drawn outline: lightly smoothed so it doesn't shimmer.
+      const raw = lm.map(mapPt);
+      smooth = smooth ? smooth.map((q, i) => [q[0] + (raw[i][0] - q[0]) * 0.55, q[1] + (raw[i][1] - q[1]) * 0.55]) : raw;
+
+      // Cursor: anchored mostly on the index knuckle, which barely moves when you pinch,
+      // with a little of the fingertip so pointing still steers it. Then One Euro filtered.
+      // Filtered in camera coordinates (0-1), which is the scale the filter's settings are tuned for.
+      cur = mapPt({ x: fx.filter(lm[5].x * 0.7 + lm[8].x * 0.3, t), y: fy.filter(lm[5].y * 0.7 + lm[8].y * 0.3, t) });
+
+      // Pinch: 3D thumb-to-index distance (steady when the hand tilts), smoothed, with hysteresis
+      // and two agreeing frames before it flips, so one noisy frame can't click or release.
+      const d = Math.hypot(wl[4].x - wl[8].x, wl[4].y - wl[8].y, wl[4].z - wl[8].z);
+      pinchDist = pinchDist === null ? d : pinchDist + (d - pinchDist) * 0.5;
+      const wants = pinchOn ? pinchDist < PINCH_OFF : pinchDist < PINCH_ON;
+      pinchVotes = wants !== pinchOn ? pinchVotes + 1 : 0;
+      const flip = pinchVotes >= 2;
+      if (flip) pinchVotes = 0;
+
       const el = document.elementFromPoint(cur[0], cur[1]);
-      setHover(el ? el.closest(CLICKABLE) : null);
-      if (!pinchOn && ratio < 0.28) {
+      if (!press || press.mode === 'tap') setHover(el ? el.closest(CLICKABLE) : null);
+      if (flip && !pinchOn) {
         pinchOn = true;
-        const t = el;
-        press = { t, y0: cur[1], ly: cur[1], mode: 'tap' };
-        if (t) {
-          if (t.closest(HOLD)) press.mode = 'hold';         // the games' Compress button and robot arrows
-          else if (t.closest(DRAG)) press.mode = 'drag';    // the 3D warm-up hand: pinch-drag to orbit
-          firePointer('pointerdown', t, cur, true);
+        press = { t: el, y0: cur[1], ly: cur[1], at: t, mode: 'tap' };
+        if (el) {
+          if (el.closest(HOLD)) press.mode = 'hold';         // the games' Compress button and robot arrows
+          else if (el.closest(DRAG)) press.mode = 'drag';    // the 3D warm-up hand: pinch-drag to orbit
+          firePointer('pointerdown', el, cur, true);
         }
-      } else if (pinchOn && ratio > 0.42) {
+      } else if (flip && pinchOn) {
         pinchOn = false;
         if (press && press.t && press.mode !== 'scroll') {
           firePointer('pointerup', press.t, cur, false);
-          const c = press.mode === 'tap' && press.t.closest(CLICKABLE);
-          if (c) { handClick(c); complete('pinch'); }
+          const target = press.mode === 'tap' && press.t.closest(CLICKABLE);
+          if (target) { handClick(target); complete('pinch'); }
         }
         press = null;
       } else if (pinchOn && press) {
-        const dy = cur[1] - press.ly;
-        press.ly = cur[1];
-        if (press.mode === 'tap' && Math.abs(cur[1] - press.y0) > 28) {
+        // A pinch becomes a scroll when it's held on empty space, or dragged clearly off whatever it started on.
+        const onNothing = !press.t || !press.t.closest(CLICKABLE);
+        if (press.mode === 'tap' && ((onNothing && t - press.at > 200) || Math.abs(cur[1] - press.y0) > 45)) {
           press.mode = 'scroll';
+          press.y0 = cur[1];                       // the joystick centre is where scrolling begins
           if (press.t) firePointer('pointercancel', press.t, cur, false);
+          setHover(null);
+          startScroll();
         }
-        if (press.mode === 'scroll') window.scrollBy(0, -dy * 2.5);      // drag the page like a touchscreen
-        else if (press.mode === 'drag' && press.t) firePointer('pointermove', press.t, cur, true);
+        if (press.mode === 'drag' && press.t) firePointer('pointermove', press.t, cur, true);
       }
 
-      c.globalAlpha = 0.5; c.strokeStyle = COL.accent; c.lineWidth = 2.5; c.lineCap = 'round';
-      DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(pts[i][0], pts[i][1]); c.lineTo(pts[j][0], pts[j][1]); c.stroke(); });
-      c.globalAlpha = 0.85;
-      pts.forEach(p => { c.beginPath(); c.arc(p[0], p[1], 4, 0, Math.PI * 2); c.fillStyle = COL.bg; c.fill(); c.lineWidth = 2; c.stroke(); });
+      c.globalAlpha = 0.45; c.strokeStyle = COL.accent; c.lineWidth = 2.5; c.lineCap = 'round';
+      DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(smooth[i][0], smooth[i][1]); c.lineTo(smooth[j][0], smooth[j][1]); c.stroke(); });
+      c.globalAlpha = 0.8;
+      smooth.forEach(q => { c.beginPath(); c.arc(q[0], q[1], 4, 0, Math.PI * 2); c.fillStyle = COL.bg; c.fill(); c.lineWidth = 2; c.stroke(); });
       c.globalAlpha = 1;
       c.beginPath(); c.arc(cur[0], cur[1], pinchOn ? 10 : 16, 0, Math.PI * 2);
       c.strokeStyle = COL.signal; c.lineWidth = 2.5; c.stroke();
       if (pinchOn) { c.fillStyle = COL.signal; c.fill(); }
-      if (press && press.mode === 'scroll') {       // up/down chevrons while scrolling
-        c.strokeStyle = COL.signal; c.lineWidth = 2.5;
-        c.beginPath(); c.moveTo(cur[0] - 7, cur[1] - 22); c.lineTo(cur[0], cur[1] - 29); c.lineTo(cur[0] + 7, cur[1] - 22);
-        c.moveTo(cur[0] - 7, cur[1] + 22); c.lineTo(cur[0], cur[1] + 29); c.lineTo(cur[0] + 7, cur[1] + 22); c.stroke();
+      if (press && press.mode === 'scroll') {       // joystick: centre dot, dead zone, and a line to the hand
+        const y0 = press.y0;
+        c.strokeStyle = COL.signal; c.fillStyle = COL.signal; c.lineWidth = 2;
+        c.globalAlpha = 0.35; c.beginPath(); c.arc(cur[0], y0, SCROLL_DEAD, 0, Math.PI * 2); c.stroke();
+        c.globalAlpha = 1; c.beginPath(); c.arc(cur[0], y0, 4, 0, Math.PI * 2); c.fill();
+        c.setLineDash([3, 4]); c.beginPath(); c.moveTo(cur[0], y0); c.lineTo(cur[0], cur[1]); c.stroke(); c.setLineDash([]);
+        const dir = Math.sign(cur[1] - y0);
+        if (Math.abs(cur[1] - y0) > SCROLL_DEAD) {
+          const ty = cur[1] + dir * 24;
+          c.beginPath(); c.moveTo(cur[0] - 8, ty - dir * 8); c.lineTo(cur[0], ty); c.lineTo(cur[0] + 8, ty - dir * 8); c.stroke();
+        }
       }
     }
   })();
