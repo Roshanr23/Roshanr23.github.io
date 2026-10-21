@@ -1816,12 +1816,14 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     }
     const fx = new OneEuro(0.9, 6), fy = new OneEuro(0.9, 6);
     let smooth = null, pinchDist = null, pinchVotes = 0;
-    const PINCH_ON = 0.032, PINCH_OFF = 0.05;      // thumb-to-index tip, in metres (MediaPipe world landmarks)
+    // Thumb-to-index tip distance as a fraction of palm length (wrist to middle knuckle), so it fits any hand size.
+    // Letting go counts sooner while scrolling, so opening your fingers always ends a scroll.
+    const PINCH_ON = 0.3, PINCH_OFF = 0.48, PINCH_OFF_SCROLL = 0.4;
 
     // Joystick scrolling. Speed grows with how far the hand is from where the scroll began, past a
     // small dead zone; it runs on its own animation frames so it stays smooth between camera frames,
     // and uses instant scrolling because the page's smooth-scroll CSS would fight every step.
-    const SCROLL_DEAD = 26, SCROLL_GAIN = 7, SCROLL_MAX = 2200;
+    const SCROLL_DEAD = 60, SCROLL_MAX = 2200;   // a wide stop band; speed rises gently past it, faster further out
     let scrollRaf = 0, scrollVel = 0, scrollLast = 0;
     function startScroll() {
       if (scrollRaf) return;
@@ -1831,9 +1833,9 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
         let goal = 0;
         if (press && press.mode === 'scroll' && cur) {
           const off = cur[1] - press.y0, past = Math.max(0, Math.abs(off) - SCROLL_DEAD);
-          goal = Math.sign(off) * Math.min(SCROLL_MAX, past * SCROLL_GAIN);
+          goal = Math.sign(off) * Math.min(SCROLL_MAX, 0.9 * past ** 1.5);
         }
-        scrollVel += (goal - scrollVel) * Math.min(1, dt * 10);            // ease in and out
+        scrollVel += (goal - scrollVel) * Math.min(1, dt * (goal === 0 ? 18 : 10));   // ease in, stop quickly
         if (Math.abs(scrollVel) > 1) window.scrollBy({ top: scrollVel * dt, behavior: 'instant' });
         if (!(press && press.mode === 'scroll') && Math.abs(scrollVel) < 5) { scrollRaf = 0; scrollVel = 0; return; }
         scrollRaf = requestAnimationFrame(loop);
@@ -1876,9 +1878,11 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
 
       // Pinch: 3D thumb-to-index distance (steady when the hand tilts), smoothed, with hysteresis
       // and two agreeing frames before it flips, so one noisy frame can't click or release.
-      const d = Math.hypot(wl[4].x - wl[8].x, wl[4].y - wl[8].y, wl[4].z - wl[8].z);
+      const palm = Math.hypot(wl[0].x - wl[9].x, wl[0].y - wl[9].y, wl[0].z - wl[9].z) || 0.09;
+      const d = Math.hypot(wl[4].x - wl[8].x, wl[4].y - wl[8].y, wl[4].z - wl[8].z) / palm;
       pinchDist = pinchDist === null ? d : pinchDist + (d - pinchDist) * 0.5;
-      const wants = pinchOn ? pinchDist < PINCH_OFF : pinchDist < PINCH_ON;
+      const off = press && press.mode === 'scroll' ? PINCH_OFF_SCROLL : PINCH_OFF;
+      const wants = pinchOn ? pinchDist < off : pinchDist < PINCH_ON;
       pinchVotes = wants !== pinchOn ? pinchVotes + 1 : 0;
       const flip = pinchVotes >= 2;
       if (flip) pinchVotes = 0;
@@ -1923,10 +1927,13 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       c.strokeStyle = COL.signal; c.lineWidth = 2.5; c.stroke();
       if (pinchOn) { c.fillStyle = COL.signal; c.fill(); }
       if (press && press.mode === 'scroll') {       // joystick: centre dot, dead zone, and a line to the hand
-        const y0 = press.y0;
+        const y0 = press.y0, inside = Math.abs(cur[1] - y0) <= SCROLL_DEAD;
         c.strokeStyle = COL.signal; c.fillStyle = COL.signal; c.lineWidth = 2;
-        c.globalAlpha = 0.35; c.beginPath(); c.arc(cur[0], y0, SCROLL_DEAD, 0, Math.PI * 2); c.stroke();
+        c.globalAlpha = inside ? 0.18 : 0.08; c.fillRect(cur[0] - 46, y0 - SCROLL_DEAD, 92, SCROLL_DEAD * 2);
+        c.globalAlpha = 0.5; c.strokeRect(cur[0] - 46, y0 - SCROLL_DEAD, 92, SCROLL_DEAD * 2);
         c.globalAlpha = 1; c.beginPath(); c.arc(cur[0], y0, 4, 0, Math.PI * 2); c.fill();
+        c.font = '500 11px ' + MONO; c.textAlign = 'center';
+        c.fillText(inside ? 'STOPPED · open to exit' : 'back to box to stop', cur[0], y0 - SCROLL_DEAD - 8); c.textAlign = 'left';
         c.setLineDash([3, 4]); c.beginPath(); c.moveTo(cur[0], y0); c.lineTo(cur[0], cur[1]); c.stroke(); c.setLineDash([]);
         const dir = Math.sign(cur[1] - y0);
         if (Math.abs(cur[1] - y0) > SCROLL_DEAD) {
