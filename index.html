@@ -6,7 +6,7 @@
 <title>Roshan Ramamurthy · XR &amp; Applied AI Developer</title>
 <meta name="description" content="Roshan Ramamurthy builds real-time XR and applied AI software: hand-tracked robot teleoperation, a mixed reality CPR trainer, an AR field guide for iPhone, and a voice-first AI assistant. CS&amp;E at The Ohio State University.">
 <meta property="og:title" content="Roshan Ramamurthy · XR &amp; Applied AI Developer">
-<meta property="og:description" content="Real-time XR and applied AI projects on Quest 3, iPhone, and real robots. Play browser versions of two of them. Seeking a Summer 2027 SWE internship.">
+<meta property="og:description" content="Real-time XR and applied AI projects on Quest 3, iPhone, and real robots. Play browser versions of two of them. Seeking a Summer 2027 internship in VR/AR/XR, AI, or software engineering.">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#0D0E10">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23BA0C2F'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-family='Georgia,serif' font-style='italic' font-size='38' fill='%23FFFFFF'%3ER%3C/text%3E%3C/svg%3E">
@@ -182,7 +182,8 @@ ul { margin: 0; }
 .cam-steps li.now { border-color: var(--accent); color: var(--ink); }
 .cam-steps li.now b { border-color: var(--accent); color: var(--accent); }
 .cam-steps li.done b { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-.cam-view { position: relative; aspect-ratio: 4 / 3; max-width: 100%; border-radius: 14px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); }
+.cam-view { --ar: 1.3333; position: relative; aspect-ratio: var(--ar); width: min(100%, calc(42dvh * var(--ar))); margin-inline: auto; border-radius: 14px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); }
+@media (max-width: 600px) { .cam-dialog { padding: 18px; gap: 12px; } .cam-dialog[open] { gap: 12px; } .cam-view { width: min(100%, calc(36dvh * var(--ar))); } .cam-how { gap: 10px; } }
 .cam-view video, .cam-view canvas { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
 .cam-view video { object-fit: cover; }
 .cam-idle { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; text-align: center; padding: 16px; }
@@ -530,7 +531,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
 
         <section class="win center" id="sp-center" aria-label="Main window">
           <div class="sp-view" id="sp-profile">
-            <span class="status"><i aria-hidden="true"></i>Open to Summer 2027 SWE internships</span>
+            <span class="status"><i aria-hidden="true"></i>Open to Summer 2027 VR/AR/XR, AI &amp; SWE internships</span>
             <h1>Roshan <span>Ramamurthy</span></h1>
             <p class="lede">XR and applied AI developer at Ohio State. I build software that runs on real hardware: <strong>hand-tracked robot teleoperation, a mixed reality CPR trainer, an AR field guide for iPhone,</strong> and a voice assistant that finishes web errands on its own.</p>
             <div class="ctas">
@@ -893,7 +894,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       <div class="card contact-card">
         <span class="eyebrow accent">Contact</span>
         <h2>Hiring for XR, spatial computing, or applied AI? <span>Let's talk.</span></h2>
-        <p>I'm looking for a Summer 2027 software engineering internship. Email is the fastest way to reach me.</p>
+        <p>I'm looking for a Summer 2027 internship in VR/AR/XR, AI, or software engineering. Email is the fastest way to reach me.</p>
         <div class="contact-row">
           <a class="btn primary email-btn" id="mailto" href="mailto:roshan23.ramamurthy@gmail.com">roshan23.ramamurthy@gmail.com</a>
           <button class="btn" id="copy" type="button">Copy email</button>
@@ -1662,8 +1663,19 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       const vision = await import(CDN + '/vision_bundle.mjs');
       const files = await vision.FilesetResolver.forVisionTasks(CDN + '/wasm');
       const opts = delegate => ({ baseOptions: { modelAssetPath: MODEL, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
-      try { landmarker = await vision.HandLandmarker.createFromOptions(files, opts('GPU')); }
-      catch (e) { landmarker = await vision.HandLandmarker.createFromOptions(files, opts('CPU')); }
+      visionLib = vision; visionFiles = files; makeOpts = opts;
+      try { landmarker = await vision.HandLandmarker.createFromOptions(files, opts('GPU')); delegateUsed = 'GPU'; }
+      catch (e) { landmarker = await vision.HandLandmarker.createFromOptions(files, opts('CPU')); delegateUsed = 'CPU'; }
+    }
+    let visionLib = null, visionFiles = null, makeOpts = null, delegateUsed = '', detectErrors = 0, switching = false;
+    async function switchToCpu() {
+      switching = true;
+      try {
+        const cpu = await visionLib.HandLandmarker.createFromOptions(visionFiles, makeOpts('CPU'));
+        const old = landmarker; landmarker = cpu; delegateUsed = 'CPU'; detectErrors = 0;
+        try { old.close(); } catch (e) {}
+      } catch (e) { /* leave things as they are; the message on screen still guides the user */ }
+      switching = false;
     }
     async function startCamera() {
       if (stream) return;
@@ -1671,8 +1683,15 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       video.srcObject = stream; pipVideo.srcObject = stream;
       await video.play(); pipVideo.play().catch(() => {});
-      view.style.aspectRatio = (video.videoWidth || 4) + ' / ' + (video.videoHeight || 3);
-      overlay.width = video.videoWidth || 640; overlay.height = video.videoHeight || 480;
+      if (!video.videoWidth) await new Promise((r) => { video.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 1500); });
+      fitView();
+      video.addEventListener('resize', fitView);       // phones can report a new size after rotating
+    }
+    // Match the view (and the landmark overlay) to the camera's real shape: portrait on most phones.
+    function fitView() {
+      const w = video.videoWidth || 640, h = video.videoHeight || 480;
+      view.style.setProperty('--ar', String(w / h));
+      overlay.width = w; overlay.height = h;
     }
     function stopCamera() {
       if (stream) stream.getTracks().forEach(t => t.stop());
@@ -1693,7 +1712,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       dlg.showModal();
     }
     function beginScan() {
-      phase = 'scan1'; scan = { held: 0, prev: null, samples: [], sign: 0, label: '' };
+      phase = 'scan1'; scan = { held: 0, prev: null, samples: [], sign: 0, label: '', signVotes: 0, lastT: 0, missing: 0 };
       setSteps(1); setBar(0);
       setMsg('Hold your palm up to the camera, fingers spread, and keep it still.');
       ensureLoop();
@@ -1738,11 +1757,17 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       if (!landmarker || !stream || video.readyState < 2 || video.currentTime === lastTime) return;
       lastTime = video.currentTime;
       let res;
-      try { res = landmarker.detectForVideo(video, performance.now()); } catch (e) { return; }
+      const now = performance.now();
+      try { res = landmarker.detectForVideo(video, now); detectErrors = 0; }
+      catch (e) {
+        // Some phones (notably iPhone Safari) create the GPU tracker fine but fail on every frame. Switch to CPU.
+        if (++detectErrors === 5 && delegateUsed === 'GPU' && !switching) switchToCpu();
+        return;
+      }
       const lm = res.landmarks && res.landmarks[0], wl = res.worldLandmarks && res.worldLandmarks[0];
       const hd = (res.handedness || res.handednesses || [])[0];
       const label = hd && hd[0] ? hd[0].categoryName : '';
-      if (phase === 'scan1' || phase === 'scan2') scanStep(lm, wl, label);
+      if (phase === 'scan1' || phase === 'scan2') scanStep(lm, wl, label, now);
       if (dlg.open) drawOverlay(lm);
       if (phase === 'live') liveStep(lm, wl);
     }
@@ -1751,25 +1776,51 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       const ax = lm[5].x - lm[0].x, ay = lm[5].y - lm[0].y, bx = lm[17].x - lm[0].x, by = lm[17].y - lm[0].y;
       return Math.sign(ax * by - ay * bx);
     }
-    function scanStep(lm, wl, label) {
-      if (!lm) { scan.held = Math.max(0, scan.held - 0.03); setBar(scan.held); setMsg(phase === 'scan1' ? 'No hand yet. Hold your palm up to the camera.' : 'No hand yet. Show the back of your hand to the camera.'); scan.prev = null; return; }
-      const s = facing(lm);
-      if (phase === 'scan2' && (s === scan.sign || (scan.label && label && label !== scan.label))) {
-        scan.held = Math.max(0, scan.held - 0.03); setBar(scan.held);
-        setMsg('Now turn the same hand around so the back faces the camera.'); scan.prev = lm; return;
+    // The hand's shape with position, rotation and size removed: wrist at the origin, wrist-to-middle-knuckle
+    // along x with length 1. Comparing shapes ignores a shaky phone camera (which moves the whole hand at once)
+    // but still notices fingers moving.
+    function handShape(lm) {
+      const o = lm[0], ux = lm[9].x - o.x, uy = lm[9].y - o.y, L = Math.hypot(ux, uy) || 1e-6, c = ux / L, sn = uy / L;
+      return lm.map((q) => { const x = q.x - o.x, y = q.y - o.y; return [(x * c + y * sn) / L, (-x * sn + y * c) / L]; });
+    }
+    const SCAN_HOLD = 1.0;        // seconds of stillness per side
+    const SCAN_STILL = 0.1;       // shape change per frame (palm lengths, mean of the 5 biggest moves) that still counts as still
+
+    function scanStep(lm, wl, label, tNow) {
+      const now = tNow ?? performance.now();
+      const dt = scan.lastT ? Math.min(0.25, (now - scan.lastT) / 1000) : 0;
+      scan.lastT = now;
+      if (!lm) {
+        scan.missing = (scan.missing || 0) + dt; scan.prev = null;
+        if (scan.missing > 0.5) {                 // a dropped frame or two just pauses; only a real absence drains it
+          scan.held = Math.max(0, scan.held - dt * 0.4); setBar(scan.held);
+          setMsg(phase === 'scan1' ? 'No hand yet. Hold your palm up to the camera, with your whole hand in view.' : 'No hand yet. Show the back of your hand to the camera.');
+        }
+        return;
       }
-      const motion = scan.prev ? lm.reduce((m, p, i) => m + d2(p, scan.prev[i]), 0) / lm.length : 1;
-      scan.prev = lm;
-      if (motion > 0.012) { scan.held = Math.max(0, scan.held - 0.02); setMsg('Hold still for a moment…'); }
-      else {
-        scan.held += 1 / 40;
+      scan.missing = 0;
+      const sgn = facing(lm);
+      if (phase === 'scan2' && sgn !== -scan.sign) {
+        scan.held = Math.max(0, scan.held - dt * 0.6); setBar(scan.held); scan.prev = null;
+        setMsg('Now flip the same hand so the back of it faces the camera.'); return;
+      }
+      const sh = handShape(lm);
+      // The few biggest moves (usually fingertips) catch fingers moving; averaging all 21 points would hide it.
+      const motion = scan.prev ? sh.map((q, i) => Math.hypot(q[0] - scan.prev[i][0], q[1] - scan.prev[i][1])).sort((a, b) => b - a).slice(0, 5).reduce((m, v) => m + v, 0) / 5 : 0;
+      scan.prev = sh;
+      if (motion > SCAN_STILL) {
+        scan.held = Math.max(0, scan.held - dt * 0.25);
+        setMsg('Hold your fingers still for a moment…');
+      } else {
+        scan.held += dt / SCAN_HOLD;
+        if (phase === 'scan1') scan.signVotes = (scan.signVotes || 0) + sgn;
         scan.samples.push([...BONES.map(([i, j]) => d3(wl[i], wl[j])), d3(wl[5], wl[17])]);
         setMsg(phase === 'scan1' ? 'Scanning your palm…' : 'Scanning the back of your hand…');
       }
       setBar(scan.held);
       if (scan.held < 1) return;
       if (phase === 'scan1') {
-        scan.sign = s; scan.label = label; scan.held = 0; phase = 'scan2'; setSteps(2); setBar(0);
+        scan.sign = Math.sign(scan.signVotes || sgn) || sgn; scan.label = label; scan.held = 0; scan.prev = null; phase = 'scan2'; setSteps(2); setBar(0);
         setMsg('Got your palm. Now flip your hand so the back faces the camera, and hold still.');
       } else finishScan();
     }
@@ -2109,6 +2160,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
         step: (lm, wl, t) => { phase = 'live'; liveStep(lm, wl, t); },
         state: () => ({ pinchOn, mode: press && press.mode, target: press && press.tg && (press.tg.el.id || press.tg.el.className), cur }),
         reset: () => { cancelPress(); lastClickAt = -1e9; hist.length = 0; },
+        scan: { begin: () => { profile = null; beginScan(); }, step: (lm, wl, label, t) => scanStep(lm, wl, label, t), phase: () => phase, held: () => scan && scan.held, msg: () => msg.textContent, profile: () => profile },
       };
     }
   })();
