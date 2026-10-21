@@ -1829,6 +1829,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     // Thumb-to-index tip distance as a fraction of palm length (wrist to middle knuckle), so it fits any hand size.
     // Letting go counts sooner while scrolling, so opening your fingers always ends a scroll.
     const PINCH_ON = 0.3, PINCH_OFF = 0.48, PINCH_OFF_SCROLL = 0.4;
+    const HAND_PX = 44;      // drawn wrist-to-middle-knuckle length; the whole hand comes out about 90 px tall
 
     // Joystick scrolling. Speed grows with how far the hand is from where the scroll began, past a
     // small dead zone; it runs on its own animation frames so it stays smooth between camera frames,
@@ -1896,10 +1897,6 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       vpLabel.textContent = 'Live · your hand';
       pipStatus.textContent = 'Tracking your hand';
 
-      // Drawn outline: lightly smoothed so it doesn't shimmer.
-      const raw = lm.map(mapPt);
-      smooth = smooth ? smooth.map((q, i) => [q[0] + (raw[i][0] - q[0]) * 0.55, q[1] + (raw[i][1] - q[1]) * 0.55]) : raw;
-
       // Cursor: mostly the index knuckle (steady through a pinch) plus some fingertip, One Euro filtered
       // in camera coordinates.
       cur = mapPt({ x: fx.filter(lm[5].x * 0.7 + lm[8].x * 0.3, t), y: fy.filter(lm[5].y * 0.7 + lm[8].y * 0.3, t) });
@@ -1907,6 +1904,14 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       // Pinch: 3D thumb-to-index distance relative to palm length, lightly smoothed, with hysteresis and
       // two agreeing frames before it flips.
       const palm = Math.hypot(wl[0].x - wl[9].x, wl[0].y - wl[9].y, wl[0].z - wl[9].z) || 0.09;
+
+      // Drawn hand: a fixed-size copy of your real pose, pinned to the cursor. Built from the 3D world
+      // landmarks (metres, independent of camera distance) and scaled by your palm length, so it stays
+      // the same size whether you're close to the screen or far away. Mirrored like a selfie.
+      const ax = wl[5].x * 0.7 + wl[8].x * 0.3, ay = wl[5].y * 0.7 + wl[8].y * 0.3, k = HAND_PX / palm;
+      const rel = wl.map((w) => [-(w.x - ax) * k, (w.y - ay) * k]);
+      smooth = smooth ? smooth.map((q, i) => [q[0] + (rel[i][0] - q[0]) * 0.55, q[1] + (rel[i][1] - q[1]) * 0.55]) : rel;
+
       const d = Math.hypot(wl[4].x - wl[8].x, wl[4].y - wl[8].y, wl[4].z - wl[8].z) / palm;
       pinchDist = pinchDist === null ? d : pinchDist + (d - pinchDist) * 0.7;
       const off = press && press.mode === 'scroll' ? PINCH_OFF_SCROLL : PINCH_OFF;
@@ -1955,10 +1960,11 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       }
       if (!pinchOn) setHover(here ? here.el.closest(CLICKABLE) : null);
 
-      c.globalAlpha = 0.45; c.strokeStyle = COL.accent; c.lineWidth = 2.5; c.lineCap = 'round';
-      DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(smooth[i][0], smooth[i][1]); c.lineTo(smooth[j][0], smooth[j][1]); c.stroke(); });
-      c.globalAlpha = 0.8;
-      smooth.forEach(q => { c.beginPath(); c.arc(q[0], q[1], 4, 0, Math.PI * 2); c.fillStyle = COL.bg; c.fill(); c.lineWidth = 2; c.stroke(); });
+      const pts = smooth.map((q) => [cur[0] + q[0], cur[1] + q[1]]);
+      c.globalAlpha = 0.55; c.strokeStyle = COL.accent; c.lineWidth = 2; c.lineCap = 'round';
+      DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(pts[i][0], pts[i][1]); c.lineTo(pts[j][0], pts[j][1]); c.stroke(); });
+      c.globalAlpha = 0.85;
+      pts.forEach(q => { c.beginPath(); c.arc(q[0], q[1], 2.6, 0, Math.PI * 2); c.fillStyle = COL.bg; c.fill(); c.lineWidth = 1.5; c.stroke(); });
       c.globalAlpha = 1;
       // Click feedback: an expanding ring where the click landed.
       ripples = ripples.filter((r) => t - r.t < 450);
