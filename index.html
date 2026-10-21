@@ -1801,6 +1801,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     function sizeCursor() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       cursor.width = Math.round(innerWidth * dpr); cursor.height = Math.round(innerHeight * dpr);
+      layer.width = cursor.width; layer.height = cursor.height;
     }
     addEventListener('resize', () => { if (phase === 'live') sizeCursor(); });
     const mapPt = p => [clamp01((0.5 - p.x) * 1.6 + 0.5) * innerWidth, clamp01((p.y - 0.4) * 1.6 + 0.5) * innerHeight];
@@ -1829,7 +1830,38 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     // Thumb-to-index tip distance as a fraction of palm length (wrist to middle knuckle), so it fits any hand size.
     // Letting go counts sooner while scrolling, so opening your fingers always ends a scroll.
     const PINCH_ON = 0.3, PINCH_OFF = 0.48, PINCH_OFF_SCROLL = 0.4;
-    const HAND_PX = 44;      // drawn wrist-to-middle-knuckle length; the whole hand comes out about 90 px tall
+    const HAND_PX = 66;      // drawn wrist-to-middle-knuckle length; the whole hand comes out about 140 px tall
+    // Near-solid over empty space; see-through over anything you can press, so that UI stays readable.
+    const HAND_ALPHA_FREE = 0.9, HAND_ALPHA_OVER = 0.42;
+    let handAlpha = HAND_ALPHA_FREE;
+    const layer = document.createElement('canvas'), lctx = layer.getContext('2d');   // the hand is drawn here, then faded in one pass
+
+    // Skin tone: sampled from the camera around the palm and knuckles a couple of times a second,
+    // averaged and eased so lighting flicker doesn't show. Starts from a neutral tone until sampled.
+    const skin = { r: 198, g: 160, b: 130 };
+    const sampler = document.createElement('canvas'); sampler.width = 160; sampler.height = 120;
+    const sctx = sampler.getContext('2d', { willReadFrequently: true });
+    let lastSample = 0;
+    function sampleSkin(lm, t) {
+      if (t - lastSample < 450 || video.readyState < 2) return;
+      lastSample = t;
+      try {
+        sctx.drawImage(video, 0, 0, 160, 120);
+        let r = 0, g = 0, b = 0, n = 0;
+        // palm centre plus points between the wrist and each knuckle: skin, not fingernails or background
+        const spots = [[0, 9, 0.5], [0, 5, 0.6], [0, 13, 0.6], [0, 17, 0.55], [0, 9, 0.75], [5, 17, 0.5]];
+        for (const [i, j, f] of spots) {
+          const x = Math.round((lm[i].x + (lm[j].x - lm[i].x) * f) * 160), y = Math.round((lm[i].y + (lm[j].y - lm[i].y) * f) * 120);
+          if (x < 2 || y < 2 || x > 157 || y > 117) continue;
+          const px = sctx.getImageData(x - 2, y - 2, 5, 5).data;
+          for (let k = 0; k < px.length; k += 4) { r += px[k]; g += px[k + 1]; b += px[k + 2]; n++; }
+        }
+        if (!n) return;
+        const e = 0.35;
+        skin.r += (r / n - skin.r) * e; skin.g += (g / n - skin.g) * e; skin.b += (b / n - skin.b) * e;
+      } catch (err) { /* a frame that can't be read is simply skipped */ }
+    }
+    const skinCss = (k = 1) => `rgb(${Math.round(skin.r * k)}, ${Math.round(skin.g * k)}, ${Math.round(skin.b * k)})`;
 
     // Joystick scrolling. Speed grows with how far the hand is from where the scroll began, past a
     // small dead zone; it runs on its own animation frames so it stays smooth between camera frames,
@@ -1908,6 +1940,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       // Drawn hand: a fixed-size copy of your real pose, pinned to the cursor. Built from the 3D world
       // landmarks (metres, independent of camera distance) and scaled by your palm length, so it stays
       // the same size whether you're close to the screen or far away. Mirrored like a selfie.
+      sampleSkin(lm, t);
       const ax = wl[5].x * 0.7 + wl[8].x * 0.3, ay = wl[5].y * 0.7 + wl[8].y * 0.3, k = HAND_PX / palm;
       const rel = wl.map((w) => [-(w.x - ax) * k, (w.y - ay) * k]);
       smooth = smooth ? smooth.map((q, i) => [q[0] + (rel[i][0] - q[0]) * 0.55, q[1] + (rel[i][1] - q[1]) * 0.55]) : rel;
@@ -1961,10 +1994,33 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       if (!pinchOn) setHover(here ? here.el.closest(CLICKABLE) : null);
 
       const pts = smooth.map((q) => [cur[0] + q[0], cur[1] + q[1]]);
-      c.globalAlpha = 0.55; c.strokeStyle = COL.accent; c.lineWidth = 2; c.lineCap = 'round';
-      DRAW.forEach(([i, j]) => { c.beginPath(); c.moveTo(pts[i][0], pts[i][1]); c.lineTo(pts[j][0], pts[j][1]); c.stroke(); });
-      c.globalAlpha = 0.85;
-      pts.forEach(q => { c.beginPath(); c.arc(q[0], q[1], 2.6, 0, Math.PI * 2); c.fillStyle = COL.bg; c.fill(); c.lineWidth = 1.5; c.stroke(); });
+      // A solid hand in your skin tone: palm polygon plus rounded fingers, drawn twice, first wider and
+      // dark for an outline that reads on any background, then the skin colour on top.
+      const fw = HAND_PX * 0.2;                                   // finger thickness
+      const palmPoly = [0, 1, 5, 9, 13, 17];
+      // Drawn solid on its own layer, then faded onto the page in one pass, so overlapping fingers
+      // don't stack into darker patches.
+      if (layer.width !== cursor.width || layer.height !== cursor.height) { layer.width = cursor.width; layer.height = cursor.height; }
+      const L = lctx;
+      L.setTransform(dpr, 0, 0, dpr, 0, 0); L.clearRect(0, 0, innerWidth, innerHeight);
+      const handShape = (extra, style) => {
+        L.strokeStyle = style; L.fillStyle = style; L.lineCap = 'round'; L.lineJoin = 'round';
+        L.lineWidth = extra * 2 + fw * 0.6;
+        L.beginPath(); palmPoly.forEach((i, n) => (n ? L.lineTo : L.moveTo).call(L, pts[i][0], pts[i][1])); L.closePath(); L.fill(); L.stroke();
+        for (const ch of CHAINS) {
+          L.lineWidth = extra * 2 + (ch[1] === 1 ? fw * 1.1 : fw);
+          L.beginPath(); L.moveTo(pts[ch[1]][0], pts[ch[1]][1]);
+          for (let n = 2; n < ch.length; n++) L.lineTo(pts[ch[n]][0], pts[ch[n]][1]);
+          L.stroke();
+        }
+      };
+      handShape(2, 'rgb(20, 20, 22)');
+      handShape(0, skinCss());
+      L.fillStyle = skinCss(0.72);                              // light shading on the finger joints so the pose reads
+      for (const i of [2, 3, 6, 7, 10, 11, 14, 15, 18, 19]) { L.beginPath(); L.arc(pts[i][0], pts[i][1], fw * 0.18, 0, Math.PI * 2); L.fill(); }
+      const overUi = !!here || !!(press && press.tg);
+      handAlpha += ((overUi ? HAND_ALPHA_OVER : HAND_ALPHA_FREE) - handAlpha) * 0.35;      // ease, ~150 ms
+      c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = handAlpha; c.drawImage(layer, 0, 0); c.restore();
       c.globalAlpha = 1;
       // Click feedback: an expanding ring where the click landed.
       ripples = ripples.filter((r) => t - r.t < 450);
