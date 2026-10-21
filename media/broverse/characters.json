@@ -1,0 +1,68 @@
+{
+ "characters": [
+  {
+   "name": "Bro",
+   "special": "Antenna Spin",
+   "blurb": "The king. You talk to Bro; he sends the right friend to do the work.",
+   "height": 2.66,
+   "width": 2.944,
+   "slug": "bro"
+  },
+  {
+   "name": "Cloud",
+   "special": "Float",
+   "blurb": "Mostly asleep. Wakes up to float over and say something kind.",
+   "height": 2.017,
+   "width": 2.961,
+   "slug": "cloud"
+  },
+  {
+   "name": "Star",
+   "special": "Spin",
+   "blurb": "Never not excited. Will spin at the slightest good news.",
+   "height": 2.367,
+   "width": 2.45,
+   "slug": "star"
+  },
+  {
+   "name": "Sprout",
+   "special": "Grow",
+   "blurb": "Patient. Remembers everything and grows a little every day.",
+   "height": 3.253,
+   "width": 2.811,
+   "slug": "sprout"
+  },
+  {
+   "name": "Mushroom",
+   "special": "Bounce",
+   "blurb": "Friendly to everyone. Bounces when happy, which is most of the time.",
+   "height": 2.2,
+   "width": 2.813,
+   "slug": "mushroom"
+  },
+  {
+   "name": "Triangle",
+   "special": "Tip-Tap",
+   "blurb": "Precise about everything. Tip-taps side to side when a plan comes together.",
+   "height": 2.088,
+   "width": 2.85,
+   "slug": "triangle"
+  },
+  {
+   "name": "Astro",
+   "special": "Zero-G",
+   "blurb": "Explorer. Treats every new website like a new planet.",
+   "height": 2.83,
+   "width": 1.72,
+   "slug": "astro"
+  },
+  {
+   "name": "Cat",
+   "special": "Pounce",
+   "blurb": "Aloof, secretly the most helpful. Tail never stops.",
+   "height": 1.93,
+   "width": 2.028,
+   "slug": "cat"
+  }
+ ]
+}
